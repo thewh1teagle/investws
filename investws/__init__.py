@@ -7,6 +7,8 @@ import random
 import re
 from typing import List, Callable
 from pathlib import Path
+import socket
+
 
 class InvestWS:
 
@@ -39,13 +41,24 @@ class InvestWS:
 
 
     async def start(self):
-        async with websockets.connect(self.url, user_agent_header=self.USER_AGENT, ping_interval=None) as websocket:
-            message = await websocket.recv()
-            if message != 'o':
-                raise Exception('Unxcpected initial message received!')
-            await self._subscribe(websocket)
-            asyncio.create_task(self._heartbeat_loop(websocket))
-            await self._poll_messages(websocket)
+        while True:
+            try:
+                async with websockets.connect(self.url, user_agent_header=self.USER_AGENT, ping_interval=None) as websocket:
+                    message = await websocket.recv()
+                    if message != 'o':
+                        raise Exception('Unxcpected initial message received!')
+                    await self._subscribe(websocket)
+                    task = asyncio.create_task(self._heartbeat_loop(websocket))
+                    await self._poll_messages(websocket)
+            except socket.gaierror:
+                try:
+                    await task.cancel()
+                except:
+                    pass
+                print('ws disconnected, retry...')
+                await asyncio.sleep(5)
+                continue
+
 
     async def _subscribe(self, websocket):
         message_content = ''
