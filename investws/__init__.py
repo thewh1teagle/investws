@@ -14,40 +14,49 @@ class InvestWS:
 
     USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'
 
-    def __init__(self, pairs: List[str]) -> None:
+    def __init__(self) -> None:
         self.url = self._generate_stream_url()
         self.stop_event = asyncio.Event()
-
-        json_path = Path(__file__).parent / 'pairs.json'
-        json_path = json_path.resolve().absolute()
-        with open(json_path) as f: # took from https://github.com/DavideViolante/investing-com-api/blob/master/mapping.js
-            pairs_dict: dict = json.load(f)
         self.pids = []
-        for pair in pairs:
-            pair_info = pairs_dict.get(pair)
-            if not pair_info:
-                raise Exception(f'pair {pair} not found!')
-            pid = pair_info['pairId']
-            self.pids.append(pid)
+        self.heartbeat_task = None
 
-
-    async def stop(self):
+    async def close(self):
         self.stop_event.set()
+        self.heartbeat_task.cancel()
+        await self.heartbeat_task
 
-    def get_pairs() -> List[str]:
+    def get_pairs(self) -> dict:
         json_path = Path(__file__).parent / 'pairs.json'
         json_path = json_path.resolve().absolute()
         with open(json_path) as f: # took from https://github.com/DavideViolante/investing-com-api/blob/master/mapping.js
-            pairs_dict: dict = json.load(f)
-        return list(pairs_dict.keys())
+            return json.load(f)
 
 
-    async def listen(self):
+    def _set_pairs(self, pairs: List[dict] | dict):
+        if isinstance(pairs, list):
+            for pair in pairs:
+                self.pids.append(pair.get('pairId'))
+        else:
+            self.pids.extend(pairs.get('pairId'))
+
+
+    def load_pairs_from_str(self, pairs_str_list: List[str]):
+        pairs = self.get_pairs()
+        return [pairs[p] for p in pairs_str_list if pairs[p]]
+        
+    
+    async def listen(self, pairs: List[dict] | List[str]):
+        if isinstance(pairs[0], str):
+            pairs = self.load_pairs_from_str(pairs)
+        self._set_pairs(pairs)
+        pairs_map = {p['pairId']:p for p in pairs}
         async for message in self._connect_websocket():
+            # add pairs
+            pid = message.get('pid')
+            message['pair'] = pairs_map.get(pid, {})
             yield message
 
     async def _connect_websocket(self):
-        heartbeat_task = None
         while not self.stop_event.is_set():
             try:
                 async with websockets.connect(self.url, user_agent_header=self.USER_AGENT, ping_interval=None) as websocket:
@@ -57,7 +66,7 @@ class InvestWS:
                     await self._subscribe(websocket)
                     
                     # Start the heartbeat loop as a task
-                    heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
+                    self.heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
                     
                     async for message in self._poll_messages(websocket):
                         yield message
@@ -66,8 +75,8 @@ class InvestWS:
                 await asyncio.sleep(5)
             except (asyncio.CancelledError, KeyboardInterrupt):
                 self.stop_event.set()
-                if heartbeat_task:
-                    await heartbeat_task
+                if self.heartbeat_task:
+                    await self.heartbeat_task
 
     async def _subscribe(self, websocket):
         message_content = ''

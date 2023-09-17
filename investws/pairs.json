@@ -397,7 +397,7 @@
     "crypto/ton": {
       "pairId": "1198309",
       "title": "Ton Coin",
-      "name": "Ton Coin"
+      "name": "TON/USD"
     },
     "crypto/bitcoin/btc-usd": {
       "pairId": "945629",
